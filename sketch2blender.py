@@ -6,76 +6,124 @@ import os
 bl_info = {
     "name" : "Sketch Blender",
     "blender" : (2, 80, 0),
-    "category" : "IMPORT-EXPORT"
+    "category" : "Import-Export"
 }
 
-class UpdateArtboards(bpy.types.Operator):
-    """Runs Import for the Specified File"""
-    bl_idname = "sketch.update_artboards"
-    bl_label = "Update Sketch Artboards"
-    bl_options = {'REGISTER','UNDO'}
+class SketchSettings(bpy.types.PropertyGroup):
+    sketch_filepath : bpy.props.StringProperty(
+        name = "Sketch file:",
+        description="Choose a Sketch file to import artboards",
+        default="",
+        maxlen=1024,
+        subtype='FILE_PATH')
 
-    # Class variables
+# Paths
+class Paths:
     sketchtool_path = '/Applications/Sketch.app/Contents/MacOS/sketchtool'
+
+# Panel
+class Sketch2BlenderPanel(bpy.types.Panel):
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Sketch"
+    bl_label = "Sketch"
     
-    # TODO: Later this will be managed through a panel
-    base_path = '/Users/afaucher/Documents/Coding/Blender/SketchBlender/'
-    file_name = 'test'
-    sketch_file = base_path + file_name + '.sketch'
-    sketch_file_json = base_path + file_name + '/document.json'
-    exports_path = base_path + 'exports/'
+    def draw_header(self, context):
+        layout = self.layout
+        layout.label(text="Sketch2Blender")
 
-    # Functions
-    @classmethod
-    def unzip_sketch_file(cls, sketch_file):
-        with zipfile.ZipFile(sketch_file, 'r') as zip_ref:
-            zip_ref.extractall(cls.base_path + cls.file_name + '/')
+    def draw(self, context):
+        layout = self.layout
 
-    @classmethod
-    def import_json_file(cls, json_file):
-        json_data = open(json_file)
-        parsed_json = (json.loads(json_data.read()))
-        print(json.dumps(parsed_json, indent=4, sort_keys=True))
+        box = layout.box()
+        box.label(text="Import Sketch File")
+        
+        # Import / Update
+        row = box.row()
+        row.prop(context.scene.sketch_settings, "sketch_filepath")
+        
+        row = box.row()
+        row.operator("sketch.import_artboards")
+        row.operator("sketch.update_artboards")
+
+# Operator
+class ImportArtboards(bpy.types.Operator):
+    """Runs Import for the Specified File"""
+    bl_idname = "sketch.import_artboards"
+    bl_label = "Import Artboards"
+    bl_options = {'REGISTER','UNDO'}
+    
+    paths = Paths()
 
     @classmethod
     def export_artboards(cls, sketch_file):
-        os.chdir(cls.base_path)
-        # TODO: sketchtool may not be in user's path. That should be registered with plugin.
-        os.system(cls.sketchtool_path + ' export artboards ' + sketch_file + ' --output=exports/')
+        abs_path = bpy.path.abspath(sketch_file)
+        os.chdir(os.path.dirname(abs_path))
+        os.system(cls.paths.sketchtool_path + ' export artboards ' + abs_path + ' --output=exports/')
 
     @classmethod
     def import_artboard(cls, artboard_path):
-        bpy.ops.import_image.to_plane(shader='PRINCIPLED', files=[{'name':artboard_path}])
-
+        bpy.ops.import_image.to_plane(shader='SHADELESS', files=[{'name':artboard_path}])
+    
     @classmethod
-    def update_artboards(cls):
-        cls.export_artboards(cls.sketch_file)
+    def import_artboards(cls, sketch_file):
+        cls.export_artboards(sketch_file)
+        exports_path = os.path.dirname(bpy.path.abspath(sketch_file)) + '/exports/'
+        # For objects that don't exist in the hierarchy, import as planes
+        for filename in os.listdir(exports_path):
+            artboard_name = os.path.splitext(filename)[0]
+            if bpy.data.objects.get(artboard_name) is None:
+                cls.import_artboard(exports_path + filename)    
+
+    def execute(self, context):
+        self.import_artboards(context.scene.sketch_settings.sketch_filepath)
+        return {'FINISHED'}
+
+# Operator
+class UpdateArtboards(bpy.types.Operator):
+    """Runs Update for the Specified File"""
+    bl_idname = "sketch.update_artboards"
+    bl_label = "Update Artboards"
+    bl_options = {'REGISTER','UNDO'}
+
+    paths = Paths()
+
+    # Functions
+    @classmethod
+    def update_artboards(cls, sketch_file):
+        cls.export_artboards(sketch_file)
         # Reload all images
         for image in bpy.data.images:
             image.reload()
-        # For objects that don't exist in the hierarchy, import as planes
-        for filename in os.listdir(cls.exports_path):
-            artboard_name = os.path.splitext(filename)[0]
-            if bpy.data.objects.get(artboard_name) is None:
-                cls.import_artboard(cls.exports_path + filename)
+
+    @classmethod
+    def export_artboards(cls, sketch_file):
+        print("Exporting artboards...")
+        abs_path = bpy.path.abspath(sketch_file)
+        os.chdir(os.path.dirname(abs_path))
+        os.system(cls.paths.sketchtool_path + ' export artboards ' + abs_path + ' --output=exports/')
 
     def execute(self, context):
-        self.unzip_sketch_file(self.sketch_file)
-        self.import_json_file(self.sketch_file_json)
-        self.export_artboards(self.sketch_file)
-        self.update_artboards()
-            
+        self.update_artboards(context.scene.sketch_settings.sketch_filepath)
         return {'FINISHED'}
     
 def register():
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
         print("SKETCHBLENDER REGISTER CALLED")
-        bpy.utils.register_class(UpdateArtboards)
+        bpy.utils.register_class(SketchSettings) 
+        bpy.utils.register_class(ImportArtboards)                   
+        bpy.utils.register_class(UpdateArtboards)    
+        bpy.utils.register_class(Sketch2BlenderPanel)
+        bpy.types.Scene.sketch_settings = bpy.props.PointerProperty(type=SketchSettings)
         
 def unregister():
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
         print("SKETCHBLENDER UNREGISTER CALLED")
+        bpy.utils.unregister_class(SketchSettings)        
+        bpy.utils.unregister_class(ImportArtboards)
         bpy.utils.unregister_class(UpdateArtboards)
+        bpy.utils.unregister_class(Sketch2BlenderPanel)
+        del bpy.types.Scene.sketch_settings
         
 # This allows you to run the script directly from Blender's Text editor
 # to test the add-on without having to install it.
